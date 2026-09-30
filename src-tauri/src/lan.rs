@@ -37,7 +37,11 @@ fn stream(nonce: &[u8], data: &[u8]) -> Vec<u8> {
     data.chunks(32)
         .enumerate()
         .flat_map(|(i, chunk)| {
-            let pad = Sha256::new().chain_update(KEY).chain_update(nonce).chain_update((i as u32).to_le_bytes()).finalize();
+            let pad = Sha256::new()
+                .chain_update(KEY)
+                .chain_update(nonce)
+                .chain_update((i as u32).to_le_bytes())
+                .finalize();
             chunk.iter().zip(pad).map(|(b, p)| b ^ p).collect::<Vec<_>>()
         })
         .collect()
@@ -85,7 +89,13 @@ pub fn peers() -> (Vec<Value>, usize) {
     let mut peers = PEERS.lock().unwrap_or_else(|e| e.into_inner());
     prune(&mut peers, Instant::now());
     let auto = peers.iter().filter(|p| p.1).count();
-    (peers.iter().map(|(id, auto, _)| json!({"id": id, "auto": auto})).collect(), auto)
+    (
+        peers
+            .iter()
+            .map(|(id, auto, _)| json!({"id": id, "auto": auto}))
+            .collect(),
+        auto,
+    )
 }
 
 pub fn start(state: State) {
@@ -161,14 +171,37 @@ mod tests {
         absorb(&mut p, "me", &pk(r#"{"id":"a1","auto":false}"#), t0);
         assert_eq!(p.len(), 1);
         assert!(!p[0].1, "the newest packet wins");
-        absorb(&mut p, "me", &pk(r#"{"id":"b2","auto":true}"#), t0 + Duration::from_secs(4));
+        absorb(
+            &mut p,
+            "me",
+            &pk(r#"{"id":"b2","auto":true}"#),
+            t0 + Duration::from_secs(4),
+        );
         prune(&mut p, t0 + Duration::from_secs(6));
-        assert_eq!(p.iter().map(|x| x.0.as_str()).collect::<Vec<_>>(), ["b2"], "a1 went quiet");
+        assert_eq!(
+            p.iter().map(|x| x.0.as_str()).collect::<Vec<_>>(),
+            ["b2"],
+            "a1 went quiet"
+        );
         for i in 0..1000 {
-            absorb(&mut p, "me", &pk(&format!(r#"{{"id":"f{i}","auto":true}}"#)), t0 + Duration::from_secs(6));
+            absorb(
+                &mut p,
+                "me",
+                &pk(&format!(r#"{{"id":"f{i}","auto":true}}"#)),
+                t0 + Duration::from_secs(6),
+            );
         }
         assert_eq!(p.len(), MAX, "a flood of ids is capped");
-        absorb(&mut p, "me", &pk(r#"{"id":"live","auto":false}"#), t0 + Duration::from_secs(12));
-        assert_eq!(p.iter().map(|x| x.0.as_str()).collect::<Vec<_>>(), ["live"], "a full list gone quiet takes a live peer");
+        absorb(
+            &mut p,
+            "me",
+            &pk(r#"{"id":"live","auto":false}"#),
+            t0 + Duration::from_secs(12),
+        );
+        assert_eq!(
+            p.iter().map(|x| x.0.as_str()).collect::<Vec<_>>(),
+            ["live"],
+            "a full list gone quiet takes a live peer"
+        );
     }
 }
