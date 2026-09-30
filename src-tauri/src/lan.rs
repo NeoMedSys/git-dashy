@@ -1,7 +1,9 @@
 //! Other gitdashys on the LAN: who is running, and whether their auto is on.
 //!
 //! Every 2s each app broadcasts `{"id": .., "auto": ..}` on UDP 50000 and listens for the others. A
-//! peer not heard from for 5s is gone. `PRS_LAN=0` turns both off.
+//! peer not heard from for 5s is gone. `PRS_LAN=0` turns both off. `PRS_LAN=10.20.0.0/16,192.168.5.0/24`
+//! keeps both to those networks: every tick checks this machine's own address, so a laptop that leaves
+//! the office goes quiet by itself and comes back when it returns.
 //!
 //! ponytail: the id is random per launch, NOT your login or a hash of it. A hash of a login is
 //! reversed by hashing a list of logins, and a stable one follows you from network to network; a
@@ -15,7 +17,8 @@
 //! ponytail: std cannot set SO_REUSEADDR before bind, so a second gitdashy on the same machine fails
 //! the bind and shows no peers; it still announces. socket2 fixes it if that ever matters.
 
-use std::net::UdpSocket;
+use std::net::{Ipv4Addr, UdpSocket};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -61,6 +64,40 @@ fn open(packet: &[u8]) -> Vec<u8> {
     stream(&packet[..8], &packet[8..])
 }
 
+/// Whether this machine is on a network PRS_LAN allows, as of the sender's last tick.
+static ON: AtomicBool = AtomicBool::new(false);
+
+/// `PRS_LAN` as networks: "a.b.c.d/n" or a bare address, comma separated, as (network, mask).
+/// None when any entry does not parse, so a typo keeps LAN off rather than on everywhere.
+fn nets(v: &str) -> Option<Vec<(u32, u32)>> {
+    v.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            let (ip, bits) = s.split_once('/').unwrap_or((s, "32"));
+            let ip = u32::from(ip.parse::<Ipv4Addr>().ok()?);
+            let bits: u32 = bits.parse().ok().filter(|b| *b <= 32)?;
+            let mask = u32::MAX.checked_shl(32 - bits).unwrap_or(0);
+            Some((ip & mask, mask))
+        })
+        .collect()
+}
+
+fn inside(nets: &[(u32, u32)], ip: Ipv4Addr) -> bool {
+    nets.iter().any(|(net, mask)| u32::from(ip) & mask == *net)
+}
+
+/// This machine's address on the route out. ponytail: connect() on UDP only picks a route, it sends
+/// nothing, so no packet leaves and nothing needs to answer.
+fn local_ip() -> Option<Ipv4Addr> {
+    let s = UdpSocket::bind("0.0.0.0:0").ok()?;
+    s.connect(("10.255.255.255", 1)).ok()?;
+    match s.local_addr().ok()?.ip() {
+        std::net::IpAddr::V4(ip) => Some(ip),
+        std::net::IpAddr::V6(_) => None,
+    }
+}
+
 /// id -> (auto, last heard).
 static PEERS: Mutex<Vec<(String, bool, Instant)>> = Mutex::new(Vec::new());
 
@@ -99,9 +136,15 @@ pub fn peers() -> (Vec<Value>, usize) {
 }
 
 pub fn start(state: State) {
-    if std::env::var("PRS_LAN").is_ok_and(|v| v == "0") {
+    let limit = std::env::var("PRS_LAN").unwrap_or_default();
+    if limit == "0" {
         return;
     }
+    // unset or "1": everywhere, which is an empty list
+    let Some(nets) = nets(if limit == "1" { "" } else { &limit }) else {
+        log::debug!("lan: PRS_LAN={limit} is not a list of networks, not starting");
+        return;
+    };
     // 4 bytes: a peer that drew our id would be dropped as our own echo
     let mut raw = [0u8; 4];
     // an all-zero id on every failing machine would read each other's packets as their own echo
@@ -118,9 +161,13 @@ pub fn start(state: State) {
         };
         let _ = s.set_broadcast(true);
         loop {
-            let packet = json!({"id": id, "auto": state.lock().auto}).to_string();
-            if let Err(e) = s.send_to(&seal(packet.as_bytes()), ("255.255.255.255", PORT)) {
-                log::debug!("lan: announce failed: {e}");
+            let on = nets.is_empty() || local_ip().is_some_and(|ip| inside(&nets, ip));
+            ON.store(on, Ordering::Relaxed);
+            if on {
+                let packet = json!({"id": id, "auto": state.lock().auto}).to_string();
+                if let Err(e) = s.send_to(&seal(packet.as_bytes()), ("255.255.255.255", PORT)) {
+                    log::debug!("lan: announce failed: {e}");
+                }
             }
             std::thread::sleep(EVERY);
         }
@@ -133,6 +180,8 @@ pub fn start(state: State) {
         let mut buf = [0u8; 256];
         loop {
             match s.recv_from(&mut buf) {
+                // off this network: heard nothing, and whoever was listed ages out in GONE
+                Ok(_) if !ON.load(Ordering::Relaxed) => {}
                 Ok((n, _)) => {
                     let mut peers = PEERS.lock().unwrap_or_else(|e| e.into_inner());
                     absorb(&mut peers, &me, &buf[..n], Instant::now());
@@ -232,5 +281,29 @@ mod tests {
             ]
         );
         assert_eq!(auto, 1, "the quiet one is neither listed nor counted");
+    }
+
+    #[test]
+    fn prs_lan_names_networks_and_a_typo_is_not_everywhere() {
+        let n = nets("10.20.0.0/16, 192.168.5.7").unwrap();
+        assert!(inside(&n, "10.20.3.4".parse().unwrap()));
+        assert!(
+            inside(&n, "192.168.5.7".parse().unwrap()),
+            "a bare address is a /32"
+        );
+        assert!(!inside(&n, "192.168.5.8".parse().unwrap()));
+        assert!(
+            !inside(&n, "10.21.0.1".parse().unwrap()),
+            "the cafe is not the office"
+        );
+        assert!(inside(&nets("0.0.0.0/0").unwrap(), "8.8.8.8".parse().unwrap()));
+        assert_eq!(nets(""), Some(vec![]), "unset is everywhere");
+        assert_eq!(nets("office"), None);
+        assert_eq!(nets("10.0.0.0/33"), None);
+        assert_eq!(
+            nets("10.0.0.0/8,oops"),
+            None,
+            "one bad entry is not a partial list"
+        );
     }
 }
