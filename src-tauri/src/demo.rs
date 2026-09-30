@@ -31,6 +31,7 @@ fn pr_at(n: u64, title: &str, repo: &str, author: &str, hours: f64, draft: bool,
             name: repo.split('/').nth(1).unwrap_or("").into(),
         },
         author: Some(Login { login: author.into() }),
+        author_association: "MEMBER".into(),
         updated_at: when.to_rfc3339_opts(SecondsFormat::Secs, false),
         ..Default::default()
     }

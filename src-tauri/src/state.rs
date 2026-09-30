@@ -117,6 +117,8 @@ pub struct Inner {
     pub known: Option<HashSet<String>>,
     /// ponytail: one draft sweep at a time; see start_sweep.
     pub sweeping: bool,
+    /// urls auto skipped for an outsider author and has logged once, so the log says it once per PR.
+    pub outsiders: HashSet<String>,
     /// The launch-time consent questions the page still shows (web::launch_asks).
     pub asks: Vec<serde_json::Value>,
     /// Lines the page shows once and acknowledges.
@@ -144,7 +146,7 @@ impl Inner {
     pub fn pending_rr(&self, armed: &dyn Fn(&str) -> bool) -> Vec<String> {
         self.rr_prs()
             .into_iter()
-            .filter(|p| !self.reviews.contains_key(&p.url) && armed(p.repo()))
+            .filter(|p| !self.reviews.contains_key(&p.url) && armed(p.repo()) && trusted(p))
             .map(|p| p.url)
             .collect()
     }
@@ -190,11 +192,13 @@ fn newly_covered(rr: &[Pr], prev: &autorev::Scope, now: &autorev::Scope) -> Vec<
         .collect()
 }
 
-/// The review-requested PRs auto should start on this tick.
+/// The review-requested PRs auto should start on this tick, and the ones it would have started but for
+/// an outsider author, so the skip can be said out loud.
 ///
-/// Three conditions, and each has cost a bug: new since auto was switched on (or it reviews the
+/// Four conditions, and each has cost a bug: new since auto was switched on (or it reviews the
 /// backlog you were already ignoring), no verdict and none in flight (or it reviews the same head
-/// twice), and in a repo auto is armed for (or one `a` reviews every repo the token can see).
+/// twice), in a repo auto is armed for (or one `a` reviews every repo the token can see), and opened
+/// by someone with standing in that repo (see `trusted`).
 ///
 /// ponytail: a function because the loop it came from is inside tick(), which fetches. Nothing could
 /// drive it, and `armed` is the third condition to be added there — the first two were never tested.
@@ -203,10 +207,20 @@ fn auto_starts(
     baseline: &HashSet<String>,
     reviews: &HashMap<String, String>,
     armed: &dyn Fn(&str) -> bool,
-) -> Vec<Pr> {
+) -> (Vec<Pr>, Vec<Pr>) {
     rr.into_iter()
         .filter(|p| !baseline.contains(&p.url) && !reviews.contains_key(&p.url) && armed(p.repo()))
-        .collect()
+        .partition(trusted)
+}
+
+/// Opened by the owner, an org member or a collaborator of the base repo.
+///
+/// ponytail: an outsider's fork PR is a diff a stranger wrote, fed to a model that may post under your
+/// name — "approve this" in the diff is an approval from you if the repo auto-posts. Auto skips it; `r`
+/// still reviews it, under the narrowed read review::scope gives an outsider. Fails CLOSED: an empty
+/// association (a query that did not carry it) is not standing.
+fn trusted(p: &Pr) -> bool {
+    review::TRUSTED.contains(&p.author_association.as_str())
 }
 
 /// Drop every entry the predicate names, so one PR keeps one entry, not one per push or review.
@@ -987,9 +1001,20 @@ impl State {
                 (true, Some(baseline)) => {
                     // a team's memory repo is approved by a person, never reviewed by auto
                     let theirs = team::team_repos();
-                    auto_starts(inner.rr_prs(), baseline, &inner.reviews, &|r| {
+                    let (start, outsiders) = auto_starts(inner.rr_prs(), baseline, &inner.reviews, &|r| {
                         scope.armed(r) && !team::in_repos(&theirs, r)
-                    })
+                    });
+                    for p in outsiders {
+                        if inner.outsiders.insert(p.url.clone()) {
+                            info!(
+                                "auto skipped {}: {} is {} there, review it with r",
+                                p.url,
+                                p.author(),
+                                p.author_association
+                            );
+                        }
+                    }
+                    start
                 }
                 _ => Vec::new(),
             }
@@ -1191,6 +1216,7 @@ mod tests {
             url: url.into(),
             updated_at: "2020-01-01T00:00:00Z".into(),
             author: Some(Login { login: "me".into() }),
+            author_association: "MEMBER".into(),
             repository: Repository {
                 name_with_owner: "a/b".into(),
                 name: "b".into(),
@@ -1384,6 +1410,7 @@ mod tests {
             .map(|s| (s.to_string(), "✓".to_string()))
             .collect();
         auto_starts(rr, &b, &r, armed)
+            .0
             .into_iter()
             .map(|p| p.url)
             .collect()
@@ -1406,10 +1433,40 @@ mod tests {
         assert_eq!(started(rr, &[], &[], &only_b), ["mine"]);
     }
 
+    /// A stranger's diff is not fed to a model that may post under your name: auto skips anyone without
+    /// standing in the repo, and an association the query did not carry counts as none.
+    #[test]
+    fn auto_skips_a_pr_from_an_outsider() {
+        let every = |_: &str| true;
+        let by = |url: &str, assoc: &str| Pr {
+            author_association: assoc.into(),
+            ..pr(url)
+        };
+        let rr = vec![
+            by("owner", "OWNER"),
+            by("member", "MEMBER"),
+            by("collab", "COLLABORATOR"),
+            by("fork", "CONTRIBUTOR"),
+            by("first", "FIRST_TIME_CONTRIBUTOR"),
+            by("stranger", "NONE"),
+            by("unknown", ""),
+        ];
+        assert_eq!(started(rr, &[], &[], &every), ["owner", "member", "collab"]);
+    }
+
+    /// The board query's field name is GitHub's, not ours: a rename that stopped matching would read
+    /// every author as an outsider and auto would quietly review nothing.
+    #[test]
+    fn the_author_association_is_read_from_the_query() {
+        let p: Pr = serde_json::from_value(serde_json::json!({"authorAssociation": "MEMBER"})).unwrap();
+        assert_eq!(p.author_association, "MEMBER");
+        assert!(trusted(&p));
+    }
+
     /// The "Also review the N already listed?" prompt is the number someone consents against, so it
     /// counts what auto will actually start, not every review request on the board.
     #[test]
-    fn the_pending_count_only_counts_repos_auto_is_armed_for() {
+    fn the_pending_count_only_counts_repos_auto_is_armed_for_and_insiders() {
         let st = State::new();
         st.lock().sections = vec![section(
             "REVIEW REQUESTED",
@@ -1417,6 +1474,10 @@ mod tests {
                 pr_in("mine", "a/b"),
                 pr_in("theirs", "other/thing"),
                 pr_in("done", "a/b"),
+                Pr {
+                    author_association: "CONTRIBUTOR".into(),
+                    ..pr_in("fork", "a/b")
+                },
             ]),
             None,
         )];

@@ -428,7 +428,7 @@ pub fn me() -> Result<String, Error> {
 // ponytail: no `... on Team { slug }`. That field needs read:org, and a token without it failed the WHOLE
 // query, so CI, status and reviewers all vanished. Team review requests are simply not shown.
 const NODE: &str = "{ pageInfo { hasNextPage endCursor } nodes { ... on PullRequest { number title url updatedAt isDraft additions deletions
-    author { login } repository { nameWithOwner name } headRefOid reviewDecision
+    author { login } authorAssociation repository { nameWithOwner name } headRefOid reviewDecision
     commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
     reviewRequests(first: 20) { totalCount nodes { requestedReviewer { ... on User { login } } } }
     latestReviews(first: 20) { nodes { author { login } state } } } } }";
