@@ -547,7 +547,9 @@ since memory is usually not yours alone to commit.
 
 Auto mode (`a` or `--auto`) does the same thing unattended for every review request that appears
 *after* you turn it on. `--auto` also reviews what is already listed; `a` asks whether to include
-the ones on screen or leave them as the baseline.
+the ones on screen or leave them as the baseline. Auto only reviews PRs opened by the repo's owner,
+an org member or a collaborator: a stranger's fork PR is a diff written to steer a model that may
+post under your name, so auto leaves it for you to review with `r`.
 
 Whether a finished review posts is a separate setting. Running a review is the expensive part;
 posting it is the part you cannot take back. The rail's **Agent** group lists every owner on the board,

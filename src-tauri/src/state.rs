@@ -144,7 +144,7 @@ impl Inner {
     pub fn pending_rr(&self, armed: &dyn Fn(&str) -> bool) -> Vec<String> {
         self.rr_prs()
             .into_iter()
-            .filter(|p| !self.reviews.contains_key(&p.url) && armed(p.repo()))
+            .filter(|p| !self.reviews.contains_key(&p.url) && armed(p.repo()) && trusted(p))
             .map(|p| p.url)
             .collect()
     }
@@ -192,9 +192,10 @@ fn newly_covered(rr: &[Pr], prev: &autorev::Scope, now: &autorev::Scope) -> Vec<
 
 /// The review-requested PRs auto should start on this tick.
 ///
-/// Three conditions, and each has cost a bug: new since auto was switched on (or it reviews the
+/// Four conditions, and each has cost a bug: new since auto was switched on (or it reviews the
 /// backlog you were already ignoring), no verdict and none in flight (or it reviews the same head
-/// twice), and in a repo auto is armed for (or one `a` reviews every repo the token can see).
+/// twice), in a repo auto is armed for (or one `a` reviews every repo the token can see), and opened
+/// by someone with standing in that repo (see `trusted`).
 ///
 /// ponytail: a function because the loop it came from is inside tick(), which fetches. Nothing could
 /// drive it, and `armed` is the third condition to be added there — the first two were never tested.
@@ -205,8 +206,18 @@ fn auto_starts(
     armed: &dyn Fn(&str) -> bool,
 ) -> Vec<Pr> {
     rr.into_iter()
-        .filter(|p| !baseline.contains(&p.url) && !reviews.contains_key(&p.url) && armed(p.repo()))
+        .filter(|p| !baseline.contains(&p.url) && !reviews.contains_key(&p.url) && armed(p.repo()) && trusted(p))
         .collect()
+}
+
+/// Opened by the owner, an org member or a collaborator of the base repo.
+///
+/// ponytail: an outsider's fork PR is a diff a stranger wrote, fed to a model that may post under your
+/// name — "approve this" in the diff is an approval from you if the repo auto-posts. Auto skips it; `r`
+/// still reviews it, under the narrowed read review::scope gives an outsider. Fails CLOSED: an empty
+/// association (a query that did not carry it) is not standing.
+fn trusted(p: &Pr) -> bool {
+    review::TRUSTED.contains(&p.author_association.as_str())
 }
 
 /// Drop every entry the predicate names, so one PR keeps one entry, not one per push or review.
@@ -1191,6 +1202,7 @@ mod tests {
             url: url.into(),
             updated_at: "2020-01-01T00:00:00Z".into(),
             author: Some(Login { login: "me".into() }),
+            author_association: "MEMBER".into(),
             repository: Repository {
                 name_with_owner: "a/b".into(),
                 name: "b".into(),
@@ -1404,6 +1416,24 @@ mod tests {
         let only_b = |repo: &str| repo == "a/b";
         let rr = vec![pr_in("mine", "a/b"), pr_in("theirs", "other/thing")];
         assert_eq!(started(rr, &[], &[], &only_b), ["mine"]);
+    }
+
+    /// A stranger's diff is not fed to a model that may post under your name: auto skips anyone without
+    /// standing in the repo, and an association the query did not carry counts as none.
+    #[test]
+    fn auto_skips_a_pr_from_an_outsider() {
+        let every = |_: &str| true;
+        let by = |url: &str, assoc: &str| Pr { author_association: assoc.into(), ..pr(url) };
+        let rr = vec![
+            by("owner", "OWNER"),
+            by("member", "MEMBER"),
+            by("collab", "COLLABORATOR"),
+            by("fork", "CONTRIBUTOR"),
+            by("first", "FIRST_TIME_CONTRIBUTOR"),
+            by("stranger", "NONE"),
+            by("unknown", ""),
+        ];
+        assert_eq!(started(rr, &[], &[], &every), ["owner", "member", "collab"]);
     }
 
     /// The "Also review the N already listed?" prompt is the number someone consents against, so it
