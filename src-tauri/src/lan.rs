@@ -104,7 +104,11 @@ pub fn start(state: State) {
     }
     // 4 bytes: a peer that drew our id would be dropped as our own echo
     let mut raw = [0u8; 4];
-    let _ = getrandom::fill(&mut raw);
+    // an all-zero id on every failing machine would read each other's packets as their own echo
+    if let Err(e) = getrandom::fill(&mut raw) {
+        log::debug!("lan: no randomness for an id, not starting: {e}");
+        return;
+    }
     let me: String = raw.iter().map(|b| format!("{b:02x}")).collect();
     let id = me.clone();
     std::thread::spawn(move || {
@@ -210,10 +214,14 @@ mod tests {
     #[test]
     fn peers_lists_the_live_ones_and_counts_auto() {
         let now = Instant::now();
+        // a clock under 10s old has no instant that far back
+        let Some(old) = now.checked_sub(Duration::from_secs(10)) else {
+            return;
+        };
         *PEERS.lock().unwrap() = vec![
             ("a1".into(), true, now),
             ("b2".into(), false, now),
-            ("gone".into(), true, now - Duration::from_secs(10)),
+            ("gone".into(), true, old),
         ];
         let (list, auto) = peers();
         assert_eq!(
