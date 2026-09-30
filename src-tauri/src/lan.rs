@@ -53,7 +53,10 @@ fn stream(nonce: &[u8], data: &[u8]) -> Vec<u8> {
 /// nonce(8) + scrambled json. A fresh nonce each time, so the same state never looks the same twice.
 fn seal(plain: &[u8]) -> Vec<u8> {
     let mut nonce = [0u8; 8];
-    let _ = getrandom::fill(&mut nonce);
+    // a zero nonce only makes the scrambling repeat, which obfuscation survives; said, not hidden
+    if let Err(e) = getrandom::fill(&mut nonce) {
+        log::debug!("lan: no randomness for a nonce: {e}");
+    }
     [&nonce[..], &stream(&nonce, plain)].concat()
 }
 
@@ -123,8 +126,12 @@ fn absorb(peers: &mut Vec<(String, bool, Instant)>, me: &str, packet: &[u8], at:
 
 /// The peers still live, and how many of them run auto, for the payload.
 pub fn peers() -> (Vec<Value>, usize) {
+    peers_at(Instant::now())
+}
+
+fn peers_at(at: Instant) -> (Vec<Value>, usize) {
     let mut peers = PEERS.lock().unwrap_or_else(|e| e.into_inner());
-    prune(&mut peers, Instant::now());
+    prune(&mut peers, at);
     let auto = peers.iter().filter(|p| p.1).count();
     (
         peers
@@ -262,17 +269,14 @@ mod tests {
 
     #[test]
     fn peers_lists_the_live_ones_and_counts_auto() {
-        let now = Instant::now();
-        // a clock under 10s old has no instant that far back
-        let Some(old) = now.checked_sub(Duration::from_secs(10)) else {
-            return;
-        };
+        let base = Instant::now();
+        let now = base + Duration::from_secs(10);
         *PEERS.lock().unwrap() = vec![
             ("a1".into(), true, now),
             ("b2".into(), false, now),
-            ("gone".into(), true, old),
+            ("gone".into(), true, base),
         ];
-        let (list, auto) = peers();
+        let (list, auto) = peers_at(now);
         assert_eq!(
             list,
             [
