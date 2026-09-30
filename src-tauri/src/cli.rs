@@ -1599,6 +1599,9 @@ fn dashboard(cli: Cli) -> i32 {
     state.lock().asks = crate::web::launch_asks();
     let notes = state.clone();
     std::thread::spawn(move || notes.lock().changelog = crate::update::changelog());
+    if !config::get().demo {
+        crate::lan::start(state.clone());
+    }
     let looper = state.clone();
     std::thread::Builder::new()
         .name("refresh".into())

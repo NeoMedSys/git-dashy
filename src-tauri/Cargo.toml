@@ -1,6 +1,6 @@
 [package]
 name = "gitdashy"
-version = "2.39.1"
+version = "2.39.2"
 edition = "2021"
 description = "PR dashboard with Claude reviews and shared team memory"
 license = "MIT"

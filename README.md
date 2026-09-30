@@ -788,6 +788,7 @@ Then `m` cycles them like any other model.
 | `PRS_INSTRUCTIONS` | (none) | text file appended to every review prompt; `--instructions` overrides |
 | `PRS_SETTINGS` | `~/.prs_settings.json` | where runtime picks (model, depth, theme, notify…) are saved; env vars and flags still win. The file records the effective state, so a value set by a flag is kept once any setting changes |
 | `PRS_NOTIFY` | `1` | desktop popup when a PR asks for your review; `0` turns it off, or toggle it in the Esc menu |
+| `PRS_LAN` | `1` | show other gitdashys on your network (how many, and whether their auto is on) and announce this one; scrambled UDP on port 50000 with a random per-launch id; `0` starts it off (the ☰ menu's LAN row toggles it either way); a comma-separated list of networks (`10.20.0.0/16,192.168.5.0/24`, your LAN's real subnet) keeps it to those: it announces to their broadcast addresses and hears only them, so it stays off café wifi |
 | `PRS_INLINE` | `0` | `1` = same as `--inline`: findings are also posted on the lines they name, for any repo with no rule of its own (`gitdashy inline`) |
 | `PRS_THEME` | `pencil` | colour theme: pencil, dashy, dracula, gruvbox, nord; Esc menu cycles it |
 

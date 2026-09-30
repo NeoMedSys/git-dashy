@@ -106,6 +106,11 @@ export function TopBar({ data: d, spinning, secs, onRefresh, onAuto, onMenu, onU
           <span>{`${running} agent${running > 1 ? 's' : ''} running`}</span>
         </div>
       ) : null}
+      {d?.peers?.length ? (
+        <div className="pill" title={d.peers.map((p) => `peer ${p.id}${p.auto ? ' · auto' : ''}`).join('\n')}>
+          {d.peers.length} on network · {d.peersAuto ?? 0} auto
+        </div>
+      ) : null}
       {d?.error ? (
         <div className="pill err" title={d.error}>
           ✗ refresh failed: {d.error.slice(0, 40)}

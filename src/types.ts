@@ -138,6 +138,8 @@ export type Settings = {
   subs?: string
   theme?: string
   notify?: boolean
+  /** LAN presence: announce this gitdashy and list the others. */
+  lan?: boolean
   model?: string
   depth?: string
   effort?: string
@@ -164,6 +166,10 @@ export type StateData = {
   ticks: number
   error: string
   auto: boolean
+  /** Other gitdashys on the LAN, by a random per-launch id. */
+  peers?: { id: string; auto: boolean }[]
+  /** How many of `peers` run auto. */
+  peersAuto?: number
   pending: number
   model: string
   running: number
