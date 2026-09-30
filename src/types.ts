@@ -166,6 +166,8 @@ export type StateData = {
   auto: boolean
   /** Other gitdashys on the LAN, by a random per-launch id. */
   peers?: { id: string; auto: boolean }[]
+  /** How many of `peers` run auto. */
+  peersAuto?: number
   pending: number
   model: string
   running: number

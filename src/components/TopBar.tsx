@@ -108,7 +108,7 @@ export function TopBar({ data: d, spinning, secs, onRefresh, onAuto, onMenu, onU
       ) : null}
       {d?.peers?.length ? (
         <div className="pill" title={d.peers.map((p) => `peer ${p.id}${p.auto ? ' · auto' : ''}`).join('\n')}>
-          {d.peers.length} on network · {d.peers.filter((p) => p.auto).length} auto
+          {d.peers.length} on network · {d.peersAuto ?? 0} auto
         </div>
       ) : null}
       {d?.error ? (

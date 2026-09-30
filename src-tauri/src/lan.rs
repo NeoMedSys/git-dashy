@@ -60,8 +60,15 @@ fn open(packet: &[u8]) -> Vec<u8> {
 /// id -> (auto, last heard).
 static PEERS: Mutex<Vec<(String, bool, Instant)>> = Mutex::new(Vec::new());
 
-/// Take one packet into the list, then drop whoever has gone quiet. Junk and our own echo are ignored.
+/// Drop whoever has gone quiet.
+fn prune(peers: &mut Vec<(String, bool, Instant)>, at: Instant) {
+    peers.retain(|p| at.duration_since(p.2) < GONE);
+}
+
+/// Take one packet into the list. Junk and our own echo are ignored.
 fn absorb(peers: &mut Vec<(String, bool, Instant)>, me: &str, packet: &[u8], at: Instant) {
+    // before the cap, or a list full of peers that have gone quiet turns a live one away
+    prune(peers, at);
     let v: Value = serde_json::from_slice(&open(packet)).unwrap_or_default();
     if let (Some(id), Some(auto)) = (v["id"].as_str(), v["auto"].as_bool()) {
         if id != me && id.len() <= 16 {
@@ -71,26 +78,30 @@ fn absorb(peers: &mut Vec<(String, bool, Instant)>, me: &str, packet: &[u8], at:
             }
         }
     }
-    peers.retain(|p| at.duration_since(p.2) < GONE);
 }
 
-/// The peers still live, for the payload.
-pub fn peers() -> Vec<Value> {
+/// The peers still live, and how many of them run auto, for the payload.
+pub fn peers() -> (Vec<Value>, usize) {
     let mut peers = PEERS.lock().unwrap_or_else(|e| e.into_inner());
-    absorb(&mut peers, "", b"", Instant::now());
-    peers.iter().map(|(id, auto, _)| json!({"id": id, "auto": auto})).collect()
+    prune(&mut peers, Instant::now());
+    let auto = peers.iter().filter(|p| p.1).count();
+    (peers.iter().map(|(id, auto, _)| json!({"id": id, "auto": auto})).collect(), auto)
 }
 
 pub fn start(state: State) {
     if std::env::var("PRS_LAN").is_ok_and(|v| v == "0") {
         return;
     }
-    let mut raw = [0u8; 2];
+    // 4 bytes: a peer that drew our id would be dropped as our own echo
+    let mut raw = [0u8; 4];
     let _ = getrandom::fill(&mut raw);
-    let me = format!("{:02x}{:02x}", raw[0], raw[1]);
+    let me: String = raw.iter().map(|b| format!("{b:02x}")).collect();
     let id = me.clone();
     std::thread::spawn(move || {
-        let Ok(s) = UdpSocket::bind("0.0.0.0:0") else { return };
+        let Ok(s) = UdpSocket::bind("0.0.0.0:0") else {
+            log::debug!("lan: no socket to announce on");
+            return;
+        };
         let _ = s.set_broadcast(true);
         loop {
             let packet = json!({"id": id, "auto": state.lock().auto}).to_string();
@@ -105,9 +116,16 @@ pub fn start(state: State) {
         };
         let mut buf = [0u8; 256];
         loop {
-            if let Ok((n, _)) = s.recv_from(&mut buf) {
-                let mut peers = PEERS.lock().unwrap_or_else(|e| e.into_inner());
-                absorb(&mut peers, &me, &buf[..n], Instant::now());
+            match s.recv_from(&mut buf) {
+                Ok((n, _)) => {
+                    let mut peers = PEERS.lock().unwrap_or_else(|e| e.into_inner());
+                    absorb(&mut peers, &me, &buf[..n], Instant::now());
+                }
+                // an error that repeats (interface down, a Windows ConnectionReset) would spin a core
+                Err(e) => {
+                    log::debug!("lan: recv failed: {e}");
+                    std::thread::sleep(EVERY);
+                }
             }
         }
     });
@@ -144,11 +162,13 @@ mod tests {
         assert_eq!(p.len(), 1);
         assert!(!p[0].1, "the newest packet wins");
         absorb(&mut p, "me", &pk(r#"{"id":"b2","auto":true}"#), t0 + Duration::from_secs(4));
-        absorb(&mut p, "me", b"", t0 + Duration::from_secs(6));
+        prune(&mut p, t0 + Duration::from_secs(6));
         assert_eq!(p.iter().map(|x| x.0.as_str()).collect::<Vec<_>>(), ["b2"], "a1 went quiet");
         for i in 0..1000 {
             absorb(&mut p, "me", &pk(&format!(r#"{{"id":"f{i}","auto":true}}"#)), t0 + Duration::from_secs(6));
         }
         assert_eq!(p.len(), MAX, "a flood of ids is capped");
+        absorb(&mut p, "me", &pk(r#"{"id":"live","auto":false}"#), t0 + Duration::from_secs(12));
+        assert_eq!(p.iter().map(|x| x.0.as_str()).collect::<Vec<_>>(), ["live"], "a full list gone quiet takes a live peer");
     }
 }
