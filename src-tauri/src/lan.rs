@@ -115,7 +115,9 @@ pub fn start(state: State) {
         let _ = s.set_broadcast(true);
         loop {
             let packet = json!({"id": id, "auto": state.lock().auto}).to_string();
-            let _ = s.send_to(&seal(packet.as_bytes()), ("255.255.255.255", PORT));
+            if let Err(e) = s.send_to(&seal(packet.as_bytes()), ("255.255.255.255", PORT)) {
+                log::debug!("lan: announce failed: {e}");
+            }
             std::thread::sleep(EVERY);
         }
     });
@@ -203,5 +205,24 @@ mod tests {
             ["live"],
             "a full list gone quiet takes a live peer"
         );
+    }
+
+    #[test]
+    fn peers_lists_the_live_ones_and_counts_auto() {
+        let now = Instant::now();
+        *PEERS.lock().unwrap() = vec![
+            ("a1".into(), true, now),
+            ("b2".into(), false, now),
+            ("gone".into(), true, now - Duration::from_secs(10)),
+        ];
+        let (list, auto) = peers();
+        assert_eq!(
+            list,
+            [
+                json!({"id": "a1", "auto": true}),
+                json!({"id": "b2", "auto": false})
+            ]
+        );
+        assert_eq!(auto, 1, "the quiet one is neither listed nor counted");
     }
 }
