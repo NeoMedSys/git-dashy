@@ -202,6 +202,8 @@ pub fn payload(state: &State) -> Value {
         "ticks": ticks,
         "error": error,
         "auto": auto,
+        // other gitdashys on the LAN, by a random per-launch id: see lan.rs
+        "peers": crate::lan::peers(),
         // ponytail: the boolean, not "is the list empty". A store holding nothing but an --off row
         // is a non-empty list while auto still covers everything, so a page deriving the rule from
         // the rows gets it backwards. The rule lives in autorev.rs and says so here.

@@ -164,6 +164,8 @@ export type StateData = {
   ticks: number
   error: string
   auto: boolean
+  /** Other gitdashys on the LAN, by a random per-launch id. */
+  peers?: { id: string; auto: boolean }[]
   pending: number
   model: string
   running: number
