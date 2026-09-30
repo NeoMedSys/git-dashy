@@ -119,6 +119,8 @@ pub struct Config {
     pub local_log: PathBuf,
     pub interval: u64,
     pub notify: bool,
+    /// LAN presence (lan.rs): announce this gitdashy and list the others. The ☰ menu toggles it.
+    pub lan: bool,
     pub theme: String,
     pub sub: String,
     pub window: Option<u64>,
@@ -210,6 +212,7 @@ impl Default for Config {
             debug_log: env_path("PRS_DEBUG_LOG", ".prs_debug.log"),
             interval: 300,
             notify: std::env::var("PRS_NOTIFY").map(|v| v != "0").unwrap_or(true),
+            lan: std::env::var("PRS_LAN").map(|v| v != "0").unwrap_or(true),
             theme: env_or("PRS_THEME", "pencil"),
             sub: "all".into(),
             window: Some(24),
@@ -286,6 +289,8 @@ pub struct Saved {
     pub effort: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notify: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lan: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
     #[serde(
@@ -393,6 +398,11 @@ fn cell() -> &'static RwLock<Config> {
     CONFIG.get_or_init(|| RwLock::new(Config::default()))
 }
 
+/// Whether LAN presence is on, without cloning the config: lan.rs asks on every packet.
+pub fn lan() -> bool {
+    cell().read().unwrap_or_else(|e| e.into_inner()).lan
+}
+
 /// A snapshot of the current config.
 pub fn get() -> Config {
     cell().read().unwrap_or_else(|e| e.into_inner()).clone()
@@ -484,6 +494,14 @@ pub fn apply(c: &mut Config, saved: Saved, env: &dyn Fn(&str) -> bool) {
     if let (Some(v), false) = (saved.notify, env("PRS_NOTIFY")) {
         c.notify = v;
     }
+    // ponytail: only PRS_LAN=0 or 1 is an on/off that wins over the menu. A list of networks says
+    // WHERE, not whether, so the saved toggle still applies under it.
+    if let (Some(v), false) = (
+        saved.lan,
+        std::env::var("PRS_LAN").is_ok_and(|v| v == "0" || v == "1"),
+    ) {
+        c.lan = v;
+    }
     if let (Some(v), false) = (
         saved.theme.filter(|v| THEMES.contains(&v.as_str())),
         env("PRS_THEME"),
@@ -543,6 +561,7 @@ pub fn snapshot(c: &Config) -> Saved {
         depth: Some(c.depth.clone()),
         effort: Some(c.effort.clone()),
         notify: Some(c.notify),
+        lan: Some(c.lan),
         theme: Some(c.theme.clone()),
         voice: Some(c.voice.clone()),
         hunter: Some(c.hunter.clone()),
@@ -688,7 +707,7 @@ mod tests {
         let none = |_: &str| false;
         let json = r#"{
             "model":"sonnet","interval":600,"subs":"open","window":168,"drafts":true,"inline":true,"scopes":["org:acme"],"read":{"u":"t"},
-            "hinted":true,"keyhints":false,"seen":"2.1.0","depth":"high","effort":"max","notify":true,
+            "hinted":true,"keyhints":false,"seen":"2.1.0","depth":"high","effort":"max","notify":true,"lan":false,
             "theme":"nord","voice":["caveman"],"hunter":["security"],"spells":["auth-check"]
         }"#;
         let saved: Saved = serde_json::from_str(json).unwrap();
@@ -708,6 +727,7 @@ mod tests {
         assert_eq!(c.depth, "high");
         assert_eq!(c.effort, "max");
         assert!(c.notify);
+        assert!(!c.lan, "the menu's LAN toggle survives a restart");
         assert_eq!(c.theme, "nord");
         assert_eq!(c.voice, vec!["caveman"]);
         assert_eq!(c.hunter, vec!["security"]);

@@ -138,6 +138,8 @@ export type Settings = {
   subs?: string
   theme?: string
   notify?: boolean
+  /** LAN presence: announce this gitdashy and list the others. */
+  lan?: boolean
   model?: string
   depth?: string
   effort?: string

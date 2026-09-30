@@ -2418,6 +2418,9 @@ fn post_settings(state: &State, body: &Body) -> Out {
     if body.contains_key("notify") {
         c.notify = truthy(body, "notify");
     }
+    if body.contains_key("lan") {
+        c.lan = truthy(body, "lan");
+    }
     config::normalise(&mut c);
     let saved = config::snapshot(&c);
     config::update(|cfg| *cfg = c);

@@ -831,6 +831,7 @@ export function escMenu(ctx: Ctx) {
     return [
       ['Theme', s.theme || 'pencil', () => void cycleTheme(ctx)],
       ['Notify', s.notify ? 'on' : 'off', () => void ctx.setting('notify', !s.notify)],
+      ['LAN', s.lan ? 'on' : 'off', () => void ctx.setting('lan', !s.lan)],
       ['Refresh', '', async () => { await ctx.call('/api/refresh', {}, 'refreshing…'); close(m) }, 'f'],
       ["What's new", '', async () => {
         const r = await api('/api/changelog')
