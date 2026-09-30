@@ -41,7 +41,11 @@ pub struct Pr {
     #[serde(default)]
     pub author: Option<Login>,
     /// GitHub's standing of the author in the base repo: OWNER, MEMBER, CONTRIBUTOR, NONE, ...
-    #[serde(rename = "authorAssociation", default, skip_serializing_if = "String::is_empty")]
+    #[serde(
+        rename = "authorAssociation",
+        default,
+        skip_serializing_if = "String::is_empty"
+    )]
     pub author_association: String,
     #[serde(default)]
     pub repository: Repository,

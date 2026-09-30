@@ -206,7 +206,9 @@ fn auto_starts(
     armed: &dyn Fn(&str) -> bool,
 ) -> Vec<Pr> {
     rr.into_iter()
-        .filter(|p| !baseline.contains(&p.url) && !reviews.contains_key(&p.url) && armed(p.repo()) && trusted(p))
+        .filter(|p| {
+            !baseline.contains(&p.url) && !reviews.contains_key(&p.url) && armed(p.repo()) && trusted(p)
+        })
         .collect()
 }
 
@@ -1423,7 +1425,10 @@ mod tests {
     #[test]
     fn auto_skips_a_pr_from_an_outsider() {
         let every = |_: &str| true;
-        let by = |url: &str, assoc: &str| Pr { author_association: assoc.into(), ..pr(url) };
+        let by = |url: &str, assoc: &str| Pr {
+            author_association: assoc.into(),
+            ..pr(url)
+        };
         let rr = vec![
             by("owner", "OWNER"),
             by("member", "MEMBER"),
