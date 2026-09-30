@@ -117,6 +117,8 @@ pub struct Inner {
     pub known: Option<HashSet<String>>,
     /// ponytail: one draft sweep at a time; see start_sweep.
     pub sweeping: bool,
+    /// urls auto skipped for an outsider author and has logged once, so the log says it once per PR.
+    pub outsiders: HashSet<String>,
     /// The launch-time consent questions the page still shows (web::launch_asks).
     pub asks: Vec<serde_json::Value>,
     /// Lines the page shows once and acknowledges.
@@ -190,7 +192,8 @@ fn newly_covered(rr: &[Pr], prev: &autorev::Scope, now: &autorev::Scope) -> Vec<
         .collect()
 }
 
-/// The review-requested PRs auto should start on this tick.
+/// The review-requested PRs auto should start on this tick, and the ones it would have started but for
+/// an outsider author, so the skip can be said out loud.
 ///
 /// Four conditions, and each has cost a bug: new since auto was switched on (or it reviews the
 /// backlog you were already ignoring), no verdict and none in flight (or it reviews the same head
@@ -204,12 +207,10 @@ fn auto_starts(
     baseline: &HashSet<String>,
     reviews: &HashMap<String, String>,
     armed: &dyn Fn(&str) -> bool,
-) -> Vec<Pr> {
+) -> (Vec<Pr>, Vec<Pr>) {
     rr.into_iter()
-        .filter(|p| {
-            !baseline.contains(&p.url) && !reviews.contains_key(&p.url) && armed(p.repo()) && trusted(p)
-        })
-        .collect()
+        .filter(|p| !baseline.contains(&p.url) && !reviews.contains_key(&p.url) && armed(p.repo()))
+        .partition(trusted)
 }
 
 /// Opened by the owner, an org member or a collaborator of the base repo.
@@ -1000,9 +1001,20 @@ impl State {
                 (true, Some(baseline)) => {
                     // a team's memory repo is approved by a person, never reviewed by auto
                     let theirs = team::team_repos();
-                    auto_starts(inner.rr_prs(), baseline, &inner.reviews, &|r| {
+                    let (start, outsiders) = auto_starts(inner.rr_prs(), baseline, &inner.reviews, &|r| {
                         scope.armed(r) && !team::in_repos(&theirs, r)
-                    })
+                    });
+                    for p in outsiders {
+                        if inner.outsiders.insert(p.url.clone()) {
+                            info!(
+                                "auto skipped {}: {} is {} there, review it with r",
+                                p.url,
+                                p.author(),
+                                p.author_association
+                            );
+                        }
+                    }
+                    start
                 }
                 _ => Vec::new(),
             }
@@ -1398,6 +1410,7 @@ mod tests {
             .map(|s| (s.to_string(), "✓".to_string()))
             .collect();
         auto_starts(rr, &b, &r, armed)
+            .0
             .into_iter()
             .map(|p| p.url)
             .collect()
@@ -1441,10 +1454,19 @@ mod tests {
         assert_eq!(started(rr, &[], &[], &every), ["owner", "member", "collab"]);
     }
 
+    /// The board query's field name is GitHub's, not ours: a rename that stopped matching would read
+    /// every author as an outsider and auto would quietly review nothing.
+    #[test]
+    fn the_author_association_is_read_from_the_query() {
+        let p: Pr = serde_json::from_value(serde_json::json!({"authorAssociation": "MEMBER"})).unwrap();
+        assert_eq!(p.author_association, "MEMBER");
+        assert!(trusted(&p));
+    }
+
     /// The "Also review the N already listed?" prompt is the number someone consents against, so it
     /// counts what auto will actually start, not every review request on the board.
     #[test]
-    fn the_pending_count_only_counts_repos_auto_is_armed_for() {
+    fn the_pending_count_only_counts_repos_auto_is_armed_for_and_insiders() {
         let st = State::new();
         st.lock().sections = vec![section(
             "REVIEW REQUESTED",
@@ -1452,6 +1474,10 @@ mod tests {
                 pr_in("mine", "a/b"),
                 pr_in("theirs", "other/thing"),
                 pr_in("done", "a/b"),
+                Pr {
+                    author_association: "CONTRIBUTOR".into(),
+                    ..pr_in("fork", "a/b")
+                },
             ]),
             None,
         )];
